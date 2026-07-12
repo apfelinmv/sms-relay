@@ -77,6 +77,31 @@ def configured(db):
     return db.execute("SELECT bot_token, whitelist FROM config WHERE id = 1").fetchone()
 
 
+def apply_recipient_allowlist(db, allowed_phones):
+    placeholders = ",".join("?" for _ in allowed_phones)
+    revoked_chats = db.execute(
+        f"SELECT chat_id FROM recipients WHERE phone NOT IN ({placeholders})",
+        allowed_phones,
+    ).fetchall()
+    if revoked_chats:
+        chat_ids = [row[0] for row in revoked_chats]
+        chat_placeholders = ",".join("?" for _ in chat_ids)
+        db.execute(
+            f"DELETE FROM deliveries WHERE delivered_at IS NULL "
+            f"AND chat_id IN ({chat_placeholders})",
+            chat_ids,
+        )
+    db.execute(
+        f"DELETE FROM recipients WHERE phone NOT IN ({placeholders})", allowed_phones
+    )
+    db.execute(
+        "UPDATE messages SET sender = '', body = '', sent_at = 0 "
+        "WHERE body != '' AND NOT EXISTS "
+        "(SELECT 1 FROM deliveries WHERE deliveries.message_id = messages.id "
+        "AND delivered_at IS NULL)"
+    )
+
+
 def telegram_call(token, method, payload=None, timeout=15):
     data = json.dumps(payload or {}).encode("utf-8")
     request = urllib.request.Request(
@@ -280,10 +305,7 @@ class SmsHandler(BaseHTTPRequestHandler):
                 "updated_at = excluded.updated_at",
                 (token, json.dumps(routes), int(time.time())),
             )
-            placeholders = ",".join("?" for _ in all_phones)
-            db.execute(
-                f"DELETE FROM recipients WHERE phone NOT IN ({placeholders})", all_phones
-            )
+            apply_recipient_allowlist(db, all_phones)
         WAKE_WORKER.set()
         return self.respond(200, {"ok": True, "whitelist_count": len(all_phones)})
 

@@ -72,7 +72,7 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 6. Use **Test SIM 1** and **Test SIM 2** to verify each route.
 
 A recipient may be listed for one SIM or both. Removing a number and syncing immediately
-revokes its server-side recipient registration.
+revokes its server-side recipient registration and cancels any pending deliveries to it.
 
 ## Reliability and security
 

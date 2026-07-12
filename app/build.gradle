@@ -1,0 +1,31 @@
+plugins {
+    id "com.android.application"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { localProperties.load(it) }
+}
+def relayDefaultUrl = localProperties.getProperty("relay.defaultUrl", "")
+def relayDefaultPin = localProperties.getProperty("relay.defaultPin", "")
+
+android {
+    namespace "com.example.smstotelegram"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.example.smstotelegram"
+        minSdk 23
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+
+        buildConfigField "String", "RELAY_DEFAULT_URL", "\"${relayDefaultUrl}\""
+        buildConfigField "String", "RELAY_DEFAULT_PIN", "\"${relayDefaultPin}\""
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+}

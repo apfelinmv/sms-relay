@@ -1,0 +1,6 @@
+# Android SDK path is machine-specific.
+sdk.dir=/path/to/Android/sdk
+
+# Optional defaults compiled into a private APK. Do not put a bot token here.
+relay.defaultUrl=https://YOUR_SERVER_IP
+relay.defaultPin=SHA256_CERTIFICATE_FINGERPRINT_WITHOUT_COLONS

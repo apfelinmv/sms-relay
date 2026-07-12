@@ -1,0 +1,25 @@
+<resources>
+    <string name="app_name">SMS Relay</string>
+    <string name="server_url">Server URL (https://…)</string>
+    <string name="bot_token">Telegram bot token</string>
+    <string name="sim_one_whitelist">SIM 1 recipients, one phone number per line</string>
+    <string name="sim_two_whitelist">SIM 2 recipients, one phone number per line</string>
+    <string name="certificate_pin">TLS certificate SHA-256 (optional for public certificates)</string>
+    <string name="save_and_sync">Save and sync</string>
+    <string name="allow_sms">Allow SMS access</string>
+    <string name="test_sim_one">Test SIM 1</string>
+    <string name="test_sim_two">Test SIM 2</string>
+    <string name="retry_pending">Retry pending messages</string>
+    <string name="syncing">Saving configuration…</string>
+    <string name="sending_test">Sending test…</string>
+    <string name="configuration_saved">Configuration saved on server.</string>
+    <string name="configuration_rejected">Server rejected the configuration.</string>
+    <string name="test_sent">Test accepted by server.</string>
+    <string name="test_rejected">No confirmed recipient for this SIM.</string>
+    <string name="network_error">Network error: %1$s</string>
+    <string name="status">Configured: %1$s\nSMS permission: %2$s\nPending messages: %3$d</string>
+    <string name="yes">yes</string>
+    <string name="no">no</string>
+    <string name="granted">granted</string>
+    <string name="missing">missing</string>
+</resources>

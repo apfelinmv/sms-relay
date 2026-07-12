@@ -19,6 +19,12 @@ their own phone number with the bot before receiving anything.
 The Android app has no permanent background service, polling, analytics, ads, or
 third-party runtime libraries.
 
+## Download APK
+
+Download the latest universal APK from [GitHub Releases](https://github.com/apfelinmv/sms-relay/releases/latest).
+It contains no server address, certificate fingerprint, Telegram token, or phone numbers.
+Android Studio is not required when installing the release APK.
+
 ## Server installation
 
 Requirements: Ubuntu/Debian, Python 3, Nginx, OpenSSL, systemd, a public static IP,
@@ -59,6 +65,13 @@ cp local.properties.example local.properties
 ```
 
 The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+
+Maintainers can create a consistently signed release build with a private
+`signing.properties` based on `signing.properties.example`:
+
+```sh
+./gradlew -PrelayDefaultUrl= -PrelayDefaultPin= clean lintRelease assembleRelease
+```
 
 ## Configure the phone
 

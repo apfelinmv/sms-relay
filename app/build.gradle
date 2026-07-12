@@ -7,8 +7,18 @@ def localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
     localPropertiesFile.withInputStream { localProperties.load(it) }
 }
-def relayDefaultUrl = localProperties.getProperty("relay.defaultUrl", "")
-def relayDefaultPin = localProperties.getProperty("relay.defaultPin", "")
+def relayDefaultUrl = project.hasProperty("relayDefaultUrl")
+        ? project.property("relayDefaultUrl").toString()
+        : localProperties.getProperty("relay.defaultUrl", "")
+def relayDefaultPin = project.hasProperty("relayDefaultPin")
+        ? project.property("relayDefaultPin").toString()
+        : localProperties.getProperty("relay.defaultPin", "")
+
+def signingProperties = new Properties()
+def signingPropertiesFile = rootProject.file("signing.properties")
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
 
 android {
     namespace "com.example.smstotelegram"
@@ -27,5 +37,24 @@ android {
 
     buildFeatures {
         buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                storeFile rootProject.file(signingProperties.getProperty("storeFile"))
+                storePassword signingProperties.getProperty("storePassword")
+                keyAlias signingProperties.getProperty("keyAlias")
+                keyPassword signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingPropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
     }
 }

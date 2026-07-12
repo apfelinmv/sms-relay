@@ -1,0 +1,5 @@
+# Keep the real signing.properties and keystore private and backed up.
+storeFile=/absolute/path/to/sms-relay-release.jks
+storePassword=CHANGE_ME
+keyAlias=sms-relay
+keyPassword=CHANGE_ME

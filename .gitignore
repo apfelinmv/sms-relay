@@ -2,8 +2,12 @@
 build/
 app/build/
 local.properties
+signing.properties
+*.jks
+*.keystore
 server/sms-relay.env
 server/tls.key
 server/tls.crt
 *.iml
 .idea/
+.DS_Store

@@ -3,6 +3,7 @@ package com.example.smstotelegram;
 import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -40,6 +41,7 @@ public final class MainActivity extends Activity {
         simOneInput.setText(SettingsStore.simOneWhitelist(this));
         simTwoInput.setText(SettingsStore.simTwoWhitelist(this));
         pinInput.setText(SettingsStore.certPin(this));
+        RelayKeepAliveService.start(this);
         refreshStatus();
     }
 
@@ -53,6 +55,7 @@ public final class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == SMS_PERMISSION_REQUEST) {
+            RelayKeepAliveService.start(this);
             refreshStatus();
         }
     }
@@ -161,14 +164,27 @@ public final class MainActivity extends Activity {
                 result = getString(R.string.network_error, e.getClass().getSimpleName());
             }
             String finalResult = result;
-            mainHandler.post(() -> setStatus(finalResult + "\n\n" + statusSummary()));
+            mainHandler.post(() -> {
+                RelayKeepAliveService.start(this);
+                setStatus(finalResult + "\n\n" + statusSummary());
+            });
         });
     }
 
     private void requestSmsPermission() {
+        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
         if (checkSelfPermission(Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS}, SMS_PERMISSION_REQUEST);
+            permissions.add(Manifest.permission.RECEIVE_SMS);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (!permissions.isEmpty()) {
+            requestPermissions(permissions.toArray(new String[0]), SMS_PERMISSION_REQUEST);
         } else {
+            RelayKeepAliveService.start(this);
             refreshStatus();
         }
     }
@@ -204,7 +220,9 @@ public final class MainActivity extends Activity {
         return getString(R.string.status,
                 SettingsStore.isConfigured(this) ? getString(R.string.yes) : getString(R.string.no),
                 smsAllowed ? getString(R.string.granted) : getString(R.string.missing),
-                SmsQueue.count(this));
+                SmsQueue.count(this),
+                RelayKeepAliveService.isRunning(this)
+                        ? getString(R.string.active) : getString(R.string.inactive));
     }
 
     private void setStatus(String value) {

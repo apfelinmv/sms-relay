@@ -22,6 +22,7 @@ public final class SmsReceiver extends BroadcastReceiver {
         if (messages == null || messages.length == 0) {
             return;
         }
+        RelayKeepAliveService.start(context);
         int simSlot = simSlot(intent);
 
         Map<String, StringBuilder> bodiesBySender = new LinkedHashMap<>();

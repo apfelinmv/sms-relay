@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DB_PATH = os.environ.get("SMS_DB_PATH", "/var/lib/sms-relay/messages.sqlite3")
 MAX_BODY = 3500
 WAKE_WORKER = threading.Event()
+EMPTY_ROUTES = json.dumps({"0": [], "1": []}, separators=(",", ":"))
 
 
 def connect_db():
@@ -35,6 +36,12 @@ def connect_db():
             chat_id TEXT NOT NULL UNIQUE,
             user_id TEXT NOT NULL,
             added_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS devices (
+            device_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            whitelist TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
@@ -61,6 +68,10 @@ def connect_db():
     columns = {row[1] for row in db.execute("PRAGMA table_info(messages)")}
     if "sim_slot" not in columns:
         db.execute("ALTER TABLE messages ADD COLUMN sim_slot INTEGER NOT NULL DEFAULT -1")
+    if "device_id" not in columns:
+        db.execute("ALTER TABLE messages ADD COLUMN device_id TEXT NOT NULL DEFAULT ''")
+    if "device_name" not in columns:
+        db.execute("ALTER TABLE messages ADD COLUMN device_name TEXT NOT NULL DEFAULT ''")
     return db
 
 
@@ -75,6 +86,78 @@ def normalize_phone(value):
 
 def configured(db):
     return db.execute("SELECT bot_token, whitelist FROM config WHERE id = 1").fetchone()
+
+
+def decode_routes(raw):
+    try:
+        routes = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {"0": [], "1": []}
+    return {
+        str(slot): list(routes.get(str(slot), []))
+        for slot in (0, 1)
+    }
+
+
+def allowed_phone_set(db):
+    allowed = set()
+    current = configured(db)
+    if current:
+        for numbers in decode_routes(current[1]).values():
+            allowed.update(numbers)
+    for row in db.execute("SELECT whitelist FROM devices"):
+        for numbers in decode_routes(row[0]).values():
+            allowed.update(numbers)
+    return allowed
+
+
+def routes_for_device(db, device_id):
+    if device_id:
+        row = db.execute(
+            "SELECT name, whitelist FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return row[0], decode_routes(row[1])
+    current = configured(db)
+    if not current:
+        return None
+    return "Android", decode_routes(current[1])
+
+
+def save_configuration(db, token, routes, device_id="", device_name="", claim_legacy=False):
+    encoded_routes = json.dumps(routes, separators=(",", ":"))
+    current = configured(db)
+    if current and not hmac.compare_digest(current[0], token):
+        raise PermissionError("wrong bot token")
+
+    now = int(time.time())
+    if not current:
+        legacy_routes = EMPTY_ROUTES if device_id else encoded_routes
+        db.execute(
+            "INSERT INTO config (id, bot_token, whitelist, updated_at) VALUES (1, ?, ?, ?)",
+            (token, legacy_routes, now),
+        )
+    elif not device_id:
+        db.execute(
+            "UPDATE config SET whitelist = ?, updated_at = ? WHERE id = 1",
+            (encoded_routes, now),
+        )
+
+    if device_id:
+        db.execute(
+            "INSERT INTO devices (device_id, name, whitelist, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(device_id) DO UPDATE SET name = excluded.name, "
+            "whitelist = excluded.whitelist, updated_at = excluded.updated_at",
+            (device_id, device_name, encoded_routes, now),
+        )
+        if claim_legacy:
+            db.execute(
+                "UPDATE config SET whitelist = ?, updated_at = ? WHERE id = 1",
+                (EMPTY_ROUTES, now),
+            )
+
+    apply_recipient_allowlist(db, sorted(allowed_phone_set(db)))
 
 
 def apply_recipient_allowlist(db, allowed_phones):
@@ -148,8 +231,7 @@ def process_update(token, update):
             return
         with connect_db() as db:
             row = configured(db)
-            routes = json.loads(row[1]) if row else {}
-            allowed = {number for numbers in routes.values() for number in numbers}
+            allowed = allowed_phone_set(db) if row else set()
             if phone in allowed:
                 db.execute("DELETE FROM recipients WHERE phone = ? OR chat_id = ?", (phone, chat_id))
                 db.execute(
@@ -215,7 +297,7 @@ def delivery_worker():
             )
             row = db.execute(
                 "SELECT d.message_id, d.chat_id, d.attempts, m.sender, m.body, m.sent_at, "
-                "m.sim_slot, c.bot_token "
+                "m.sim_slot, m.device_name, c.bot_token "
                 "FROM deliveries d JOIN messages m ON m.id = d.message_id "
                 "JOIN config c ON c.id = 1 WHERE d.delivered_at IS NULL AND d.next_attempt <= ? "
                 "ORDER BY m.created_at LIMIT 1",
@@ -226,9 +308,11 @@ def delivery_worker():
             WAKE_WORKER.clear()
             continue
 
-        message_id, chat_id, attempts, sender, body, sent_at, sim_slot, token = row
+        (message_id, chat_id, attempts, sender, body, sent_at, sim_slot,
+         device_name, token) = row
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(sent_at / 1000))
-        text = f"New SMS (SIM {sim_slot + 1})\nFrom: {sender}\nTime: {timestamp}\n\n{body}"
+        source = f"{device_name}, SIM {sim_slot + 1}" if device_name else f"SIM {sim_slot + 1}"
+        text = f"New SMS ({source})\nFrom: {sender}\nTime: {timestamp}\n\n{body}"
         try:
             send_bot_message(token, chat_id, text)
             with connect_db() as db:
@@ -290,24 +374,34 @@ class SmsHandler(BaseHTTPRequestHandler):
             all_phones = sorted({number for numbers in routes.values() for number in numbers})
             if not all_phones:
                 raise ValueError("empty whitelist")
+            device_id = str(payload.get("device_id", ""))
+            device_name = str(payload.get("device_name", "")).strip()
+            claim_legacy = payload.get("claim_legacy", False) is True
+            if device_id:
+                if not re.fullmatch(r"[A-Za-z0-9._-]{16,80}", device_id):
+                    raise ValueError("invalid device id")
+                if not 1 <= len(device_name) <= 64:
+                    raise ValueError("invalid device name")
+            elif device_name or claim_legacy:
+                raise ValueError("incomplete device identity")
             telegram_call(token, "getMe")
         except (KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError,
                 urllib.error.URLError):
             return self.respond(400, {"ok": False, "error": "invalid_configuration"})
 
         with connect_db() as db:
-            current = configured(db)
-            if current and not hmac.compare_digest(current[0], token):
+            try:
+                save_configuration(
+                    db, token, routes, device_id, device_name, claim_legacy
+                )
+            except PermissionError:
                 return self.respond(403, {"ok": False, "error": "wrong_bot_token"})
-            db.execute(
-                "INSERT INTO config (id, bot_token, whitelist, updated_at) VALUES (1, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET whitelist = excluded.whitelist, "
-                "updated_at = excluded.updated_at",
-                (token, json.dumps(routes), int(time.time())),
-            )
-            apply_recipient_allowlist(db, all_phones)
         WAKE_WORKER.set()
-        return self.respond(200, {"ok": True, "whitelist_count": len(all_phones)})
+        return self.respond(200, {
+            "ok": True,
+            "whitelist_count": len(all_phones),
+            "device_id": device_id,
+        })
 
     def receive_sms(self, token, payload):
         try:
@@ -316,10 +410,13 @@ class SmsHandler(BaseHTTPRequestHandler):
             body = str(payload["body"])
             sent_at = int(payload["sent_at"])
             sim_slot = int(payload["sim_slot"])
+            device_id = str(payload.get("device_id", ""))
             if not 16 <= len(message_id) <= 64 or not 1 <= len(sender) <= 128:
                 raise ValueError("invalid sms")
             if len(body) > MAX_BODY or sent_at < 0 or sim_slot not in (0, 1):
                 raise ValueError("invalid sms")
+            if device_id and not re.fullmatch(r"[A-Za-z0-9._-]{16,80}", device_id):
+                raise ValueError("invalid device id")
         except (KeyError, TypeError, ValueError):
             return self.respond(400, {"ok": False, "error": "invalid_sms"})
 
@@ -327,7 +424,10 @@ class SmsHandler(BaseHTTPRequestHandler):
             current = configured(db)
             if not current or not hmac.compare_digest(current[0], token):
                 return self.respond(401, {"ok": False, "error": "unauthorized"})
-            routes = json.loads(current[1])
+            device = routes_for_device(db, device_id)
+            if not device:
+                return self.respond(409, {"ok": False, "error": "unknown_device"})
+            device_name, routes = device
             allowed = routes.get(str(sim_slot), [])
             if not allowed:
                 return self.respond(409, {"ok": False, "error": "no_route_for_sim"})
@@ -339,8 +439,10 @@ class SmsHandler(BaseHTTPRequestHandler):
                 return self.respond(409, {"ok": False, "error": "no_recipients"})
             db.execute(
                 "INSERT OR IGNORE INTO messages "
-                "(id, sender, body, sent_at, sim_slot, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (message_id, sender, body, sent_at, sim_slot, int(time.time())),
+                "(id, sender, body, sent_at, sim_slot, device_id, device_name, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (message_id, sender, body, sent_at, sim_slot, device_id,
+                 device_name, int(time.time())),
             )
             db.executemany(
                 "INSERT OR IGNORE INTO deliveries (message_id, chat_id) VALUES (?, ?)",

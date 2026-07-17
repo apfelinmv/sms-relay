@@ -24,6 +24,7 @@ public final class MainActivity extends Activity {
     private static final int SMS_PERMISSION_REQUEST = 41;
 
     private EditText serverInput;
+    private EditText deviceNameInput;
     private EditText tokenInput;
     private EditText simOneInput;
     private EditText simTwoInput;
@@ -36,6 +37,7 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(createContent());
+        deviceNameInput.setText(SettingsStore.deviceName(this));
         serverInput.setText(SettingsStore.serverUrl(this));
         tokenInput.setText(SettingsStore.botToken(this));
         simOneInput.setText(SettingsStore.simOneWhitelist(this));
@@ -72,6 +74,9 @@ public final class MainActivity extends Activity {
         title.setTextSize(24);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(title, matchWrap());
+
+        deviceNameInput = field(R.string.device_name, true, 1);
+        root.addView(deviceNameInput, matchWrap());
 
         serverInput = field(R.string.server_url, true, 1);
         root.addView(serverInput, matchWrap());
@@ -144,6 +149,7 @@ public final class MainActivity extends Activity {
 
     private void saveInputs() {
         SettingsStore.save(this,
+                deviceNameInput.getText().toString(),
                 serverInput.getText().toString(),
                 tokenInput.getText().toString(),
                 simOneInput.getText().toString(),

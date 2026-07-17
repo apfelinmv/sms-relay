@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">SMS Relay</string>
+    <string name="device_name">Device name shown in Telegram</string>
     <string name="server_url">Server URL (https://…)</string>
     <string name="bot_token">Telegram bot token</string>
     <string name="sim_one_whitelist">SIM 1 recipients, one phone number per line</string>

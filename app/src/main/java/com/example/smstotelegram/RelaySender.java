@@ -36,10 +36,17 @@ final class RelaySender {
             routes.put("0", phoneArray(SettingsStore.simOneWhitelist(context)));
             routes.put("1", phoneArray(SettingsStore.simTwoWhitelist(context)));
             payload.put("routes", routes);
+            payload.put("device_id", SettingsStore.deviceId(context));
+            payload.put("device_name", SettingsStore.deviceName(context));
+            payload.put("claim_legacy", SettingsStore.shouldClaimLegacyRoutes(context));
         } catch (JSONException e) {
             throw new IOException("Cannot encode configuration", e);
         }
-        return post(context, "/configure", payload);
+        boolean configured = post(context, "/configure", payload);
+        if (configured) {
+            SettingsStore.markLegacyRoutesClaimed(context);
+        }
+        return configured;
     }
 
     static boolean sendQueuedSms(Context context, QueuedSms sms) throws IOException {
@@ -50,6 +57,7 @@ final class RelaySender {
             payload.put("body", sms.body);
             payload.put("sent_at", sms.sentAtMillis);
             payload.put("sim_slot", sms.simSlot);
+            payload.put("device_id", SettingsStore.deviceId(context));
         } catch (JSONException e) {
             throw new IOException("Cannot encode SMS", e);
         }

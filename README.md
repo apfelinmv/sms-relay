@@ -20,7 +20,8 @@ Mobile network -> Android SMS broadcast -> durable local queue -> HTTPS + TLS pi
 1. Android delivers `SMS_RECEIVED` to `SmsReceiver`.
 2. Multipart SMS segments are combined by sender. The app determines the physical SIM
    slot and synchronously commits the message to its private local queue.
-3. Android `JobScheduler` waits for a network and posts queued items to the relay over
+3. Each installation has a stable, pseudonymous device ID and a human-readable device
+   name. Android `JobScheduler` waits for a network and posts queued items to the relay over
    HTTPS. The bot token is used as the bearer credential. An optional SHA-256 certificate
    pin protects a self-signed IP certificate.
 4. The server validates the token and message, writes the message and per-recipient
@@ -56,10 +57,11 @@ battery restrictions; the phone settings below are mandatory on Tecno HiOS.
   443 reachable from the phone.
 - A domain is not required. The installer creates a self-signed certificate for the IP.
 
-One server installation stores one bot token and one global SIM 1/SIM 2 route configuration.
-Several phones may share it only when they intentionally use the same bot and identical
-routes. Pressing **Save and sync** from either phone replaces the shared routes. Use a
-separate relay instance for a different owner, bot, or route set.
+One server installation stores one bot token and can serve multiple Android phones. Every
+phone has independent SIM 1 and SIM 2 routes, so **Save and sync** changes only that phone.
+All phones intentionally share the same Telegram bot, while each device may forward to a
+different set of verified Telegram users. Use a separate relay instance for a different
+owner or bot.
 
 ## 1. Install the server
 
@@ -115,13 +117,15 @@ Studio is not required for the release APK.
 
 Open SMS Relay and enter:
 
-1. **Server URL:** `https://YOUR_PUBLIC_SERVER_IP`
-2. **Telegram bot token:** the complete token from `@BotFather`.
-3. **SIM 1 recipients:** allowed Telegram account phone numbers, one per line, in full
+1. **Device name:** a short source label shown in Telegram, such as `Home Tecno` or
+   `Mom Samsung`.
+2. **Server URL:** `https://YOUR_PUBLIC_SERVER_IP`
+3. **Telegram bot token:** the complete token from `@BotFather`.
+4. **SIM 1 recipients:** allowed Telegram account phone numbers, one per line, in full
    international format such as `+77001234567`.
-4. **SIM 2 recipients:** a separate list for SMS received by the second SIM. Leave it
+5. **SIM 2 recipients:** a separate list for SMS received by the second SIM. Leave it
    empty when unused.
-5. **TLS certificate SHA-256:** the fingerprint printed by `install.sh`. It may be left
+6. **TLS certificate SHA-256:** the fingerprint printed by `install.sh`. It may be left
    empty only when the server uses a certificate trusted by Android.
 
 Tap **Save and sync**, grant SMS and notification permissions, and keep the
@@ -138,7 +142,19 @@ recipients finish Telegram verification.
 
 Forwarding another person's contact is rejected because the contact's Telegram user ID
 must match the sender. Removing a number in Android and pressing **Save and sync** revokes
-that recipient and cancels their pending, undelivered messages.
+that recipient for this device. Access remains active if another configured phone still
+allows the same number.
+
+### Multiple phones on one server
+
+- Install version 1.2.0 or newer on every additional phone.
+- Use the same server URL, certificate fingerprint, and bot token.
+- Give every phone a distinct device name.
+- Configure each phone's recipient numbers independently.
+- A fresh installation derives a stable pseudonymous ID from Android's app-scoped device
+  identifier. Reinstalling on the same phone normally reconnects to the same server route.
+- Upgrading a configured 1.1.0 phone claims its legacy routes once, without changing routes
+  created by newer phones.
 
 ## 5. Required phone settings
 

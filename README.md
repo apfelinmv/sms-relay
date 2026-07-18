@@ -13,13 +13,15 @@ analytics, polling loop, cloud SDK, or third-party Android runtime dependencies.
 ## Architecture
 
 ```text
-Mobile network -> Android SMS broadcast -> durable local queue -> HTTPS + TLS pin
-               -> private relay server -> SQLite -> Telegram Bot API -> recipients
+Mobile network -> Android SMS broadcast + inbox event -> durable local queue
+               -> HTTPS + TLS pin -> private relay server -> SQLite -> Telegram
 ```
 
-1. Android delivers `SMS_RECEIVED` to `SmsReceiver`.
-2. Multipart SMS segments are combined by sender. The app determines the physical SIM
-   slot and synchronously commits the message to its private local queue.
+1. Android delivers `SMS_RECEIVED` to `SmsReceiver`. The foreground guard also observes
+   the system SMS inbox for changes; this is event-driven and does not poll.
+2. Multipart SMS segments are combined by sender. If vendor firmware supplies an empty or
+   unusable broadcast, `InboxRecovery` reads only fresh inbox rows. The app determines the
+   physical SIM slot and synchronously commits the message to its private local queue.
 3. Each installation has a stable, pseudonymous device ID and a human-readable device
    name. Android `JobScheduler` waits for a network and posts queued items to the relay over
    HTTPS. The bot token is used as the bearer credential. An optional SHA-256 certificate
@@ -29,8 +31,8 @@ Mobile network -> Android SMS broadcast -> durable local queue -> HTTPS + TLS pi
 5. A server worker sends the SMS through the Telegram Bot API. Failed deliveries retry
    with exponential backoff, independently for every recipient.
 6. After every recipient has received the SMS, sender, body, and timestamp are erased
-   from the server. The random message ID and delivery metadata remain for up to seven
-   days for deduplication.
+   from the server. The deterministic message ID and delivery metadata remain for up to
+   seven days for deduplication.
 
 The foreground guard performs no polling or periodic network work. It keeps a low-priority
 status notification and reduces process eviction. It does **not** override manufacturer
@@ -39,10 +41,11 @@ battery restrictions; the phone settings below are mandatory on Tecno HiOS.
 ## Repository layout
 
 - `app/src/main/java/.../SmsReceiver.java`: parses incoming SMS and identifies the SIM.
+- `InboxRecovery.java`: recovers only new, recent rows from Android's SMS inbox.
 - `SmsQueue.java`: synchronously stores up to 100 pending SMS in private app storage.
 - `DeliveryJobService.java` and `DeliveryScheduler.java`: network-aware Android retries.
 - `RelaySender.java`: HTTPS client and optional SHA-256 certificate pin validation.
-- `RelayKeepAliveService.java`: idle foreground guard and persistent notification.
+- `RelayKeepAliveService.java`: idle foreground guard, inbox observer, and notification.
 - `MainActivity.java` and `SettingsStore.java`: local configuration UI and storage.
 - `server/sms_relay.py`: HTTP API, SQLite persistence, Telegram verification and delivery.
 - `server/install.sh`: Debian/Ubuntu installation script.
@@ -128,7 +131,7 @@ Open SMS Relay and enter:
 6. **TLS certificate SHA-256:** the fingerprint printed by `install.sh`. It may be left
    empty only when the server uses a certificate trusted by Android.
 
-Tap **Save and sync**, grant SMS and notification permissions, and keep the
+Tap **Save and sync**, grant both requested SMS permissions and notification permission, and keep the
 **SMS Relay active** notification enabled. Use **Test SIM 1** and **Test SIM 2** after the
 recipients finish Telegram verification.
 
@@ -161,7 +164,7 @@ allows the same number.
 Android manufacturers may suppress SMS broadcasts even when the standard battery screen
 says the app is unrestricted. Configure all available items:
 
-1. Allow **SMS** and **Notifications** permissions.
+1. Allow both requested **SMS** permissions and **Notifications**.
 2. Enable **Auto-start** for SMS Relay.
 3. Set battery use to **Unrestricted** / **Do not optimize**.
 4. Allow background mobile data and Wi-Fi.
@@ -202,11 +205,12 @@ not an SMS and cannot test `SMS_RECEIVED`.
   Internet do not erase queued messages.
 - Android and the server retry independently. The server backoff starts at 30 seconds and
   is capped at one hour.
-- Random message IDs make repeated uploads idempotent.
+- Deterministic message IDs make repeated uploads idempotent.
 - The app is not the default SMS application and does not delete messages from the phone.
-- If firmware blocks the `SMS_RECEIVED` broadcast before it reaches the app, that SMS
-  cannot enter the local queue or be recovered automatically. Correct battery settings
-  are therefore essential.
+- If a normal `SMS_RECEIVED` broadcast is empty or unusable but the SMS exists in Android's
+  inbox, the running observer recovers it automatically. Opening the app and boot recovery
+  also scan recent rows. SMS that Android never writes to the inbox cannot be reconstructed,
+  so the battery settings remain essential.
 - USSD dialogs, push notifications, messenger messages, and cell broadcast alerts are not
   ordinary SMS and are not forwarded.
 
@@ -220,6 +224,8 @@ not an SMS and cannot test `SMS_RECEIVED`.
 - SMS content is cleared from the server after delivery to all recipients. Pending content
   remains until delivery so retries can work.
 - Android backup and data extraction are disabled for configuration and queue data.
+- `READ_SMS` is used only to query fresh inbox rows for recovery. The app has no API or UI
+  for exporting SMS history and does not upload old inbox contents.
 - Telegram bot chats use Telegram's cloud encryption, not end-to-end encryption. Telegram,
   a compromised bot token, a compromised server, or a compromised recipient account can
   expose messages. Rotate an exposed bot token and rebuild the server configuration.

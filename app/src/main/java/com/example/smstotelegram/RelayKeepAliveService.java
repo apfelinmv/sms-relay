@@ -6,14 +6,37 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.database.ContentObserver;
+import android.os.Handler;
 import android.os.Build;
 import android.os.IBinder;
+import android.os.Looper;
+import android.provider.Telephony;
 
 public final class RelayKeepAliveService extends Service {
     private static final String CHANNEL_ID = "sms_relay_status";
     private static final int NOTIFICATION_ID = 30231;
+    private static final long INBOX_SETTLE_DELAY_MILLIS = 750L;
+
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private boolean inboxObserverRegistered;
+    private final Runnable recoverInbox = () -> {
+        int recovered = InboxRecovery.recoverRecent(this, 5 * 60_000L);
+        if (recovered > 0 || SmsQueue.hasPending(this)) {
+            DeliveryScheduler.schedule(this, "inbox-change");
+        }
+    };
+    private final ContentObserver inboxObserver = new ContentObserver(mainHandler) {
+        @Override
+        public void onChange(boolean selfChange) {
+            mainHandler.removeCallbacks(recoverInbox);
+            mainHandler.postDelayed(recoverInbox, INBOX_SETTLE_DELAY_MILLIS);
+        }
+    };
 
     static void start(Context context) {
         if (!SettingsStore.isConfigured(context)) {
@@ -36,14 +59,26 @@ public final class RelayKeepAliveService extends Service {
         super.onCreate();
         createChannel();
         startForeground(NOTIFICATION_ID, notification());
+        ensureInboxObserver();
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        ensureInboxObserver();
         if (SmsQueue.hasPending(this)) {
             DeliveryScheduler.schedule(this, "keep-alive");
         }
         return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        mainHandler.removeCallbacks(recoverInbox);
+        if (inboxObserverRegistered) {
+            getContentResolver().unregisterContentObserver(inboxObserver);
+            inboxObserverRegistered = false;
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -77,6 +112,21 @@ public final class RelayKeepAliveService extends Service {
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
             manager.createNotificationChannel(channel);
+        }
+    }
+
+    private void ensureInboxObserver() {
+        if (inboxObserverRegistered
+                || checkSelfPermission(Manifest.permission.READ_SMS)
+                != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        try {
+            getContentResolver().registerContentObserver(
+                    Telephony.Sms.CONTENT_URI, true, inboxObserver);
+            inboxObserverRegistered = true;
+        } catch (RuntimeException ignored) {
+            // Some vendor providers can be temporarily unavailable during boot.
         }
     }
 

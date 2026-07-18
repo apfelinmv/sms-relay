@@ -18,36 +18,41 @@ public final class SmsReceiver extends BroadcastReceiver {
             return;
         }
 
-        SmsMessage[] messages = Telephony.Sms.Intents.getMessagesFromIntent(intent);
-        if (messages == null || messages.length == 0) {
-            return;
-        }
         RelayKeepAliveService.start(context);
+        SmsMessage[] messages = Telephony.Sms.Intents.getMessagesFromIntent(intent);
         int simSlot = simSlot(intent);
 
         Map<String, StringBuilder> bodiesBySender = new LinkedHashMap<>();
         Map<String, Long> timesBySender = new LinkedHashMap<>();
-        for (SmsMessage message : messages) {
-            if (message == null) {
-                continue;
-            }
-            String sender = message.getDisplayOriginatingAddress();
-            String key = sender == null ? "unknown" : sender;
-            String body = message.getMessageBody();
-            if (!bodiesBySender.containsKey(key)) {
-                bodiesBySender.put(key, new StringBuilder());
-                timesBySender.put(key, message.getTimestampMillis());
-            }
-            if (body != null) {
-                bodiesBySender.get(key).append(body);
+        if (messages != null) {
+            for (SmsMessage message : messages) {
+                if (message == null) {
+                    continue;
+                }
+                String sender = message.getDisplayOriginatingAddress();
+                String key = sender == null ? "unknown" : sender;
+                String body = message.getMessageBody();
+                if (!bodiesBySender.containsKey(key)) {
+                    bodiesBySender.put(key, new StringBuilder());
+                    timesBySender.put(key, message.getTimestampMillis());
+                }
+                if (body != null) {
+                    bodiesBySender.get(key).append(body);
+                }
             }
         }
 
+        boolean enqueued = false;
         for (Map.Entry<String, StringBuilder> entry : bodiesBySender.entrySet()) {
-            SmsQueue.enqueue(context, entry.getKey(), entry.getValue().toString(),
+            enqueued |= SmsQueue.enqueue(context, entry.getKey(), entry.getValue().toString(),
                     timesBySender.get(entry.getKey()), simSlot);
         }
-        DeliveryScheduler.schedule(context, "sms");
+        if (bodiesBySender.isEmpty()) {
+            enqueued = InboxRecovery.recoverRecent(context, 2 * 60_000L) > 0;
+        }
+        if (enqueued || SmsQueue.hasPending(context)) {
+            DeliveryScheduler.schedule(context, "sms");
+        }
     }
 
     private int simSlot(Intent intent) {

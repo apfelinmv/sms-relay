@@ -44,6 +44,7 @@ public final class MainActivity extends Activity {
         simTwoInput.setText(SettingsStore.simTwoWhitelist(this));
         pinInput.setText(SettingsStore.certPin(this));
         RelayKeepAliveService.start(this);
+        recoverRecentSms();
         refreshStatus();
     }
 
@@ -54,10 +55,18 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        recoverRecentSms();
+        refreshStatus();
+    }
+
+    @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == SMS_PERMISSION_REQUEST) {
             RelayKeepAliveService.start(this);
+            recoverRecentSms();
             refreshStatus();
         }
     }
@@ -182,6 +191,9 @@ public final class MainActivity extends Activity {
         if (checkSelfPermission(Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
             permissions.add(Manifest.permission.RECEIVE_SMS);
         }
+        if (checkSelfPermission(Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            permissions.add(Manifest.permission.READ_SMS);
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED) {
@@ -222,6 +234,8 @@ public final class MainActivity extends Activity {
 
     private String statusSummary() {
         boolean smsAllowed = checkSelfPermission(Manifest.permission.RECEIVE_SMS)
+                == PackageManager.PERMISSION_GRANTED
+                && checkSelfPermission(Manifest.permission.READ_SMS)
                 == PackageManager.PERMISSION_GRANTED;
         return getString(R.string.status,
                 SettingsStore.isConfigured(this) ? getString(R.string.yes) : getString(R.string.no),
@@ -233,6 +247,12 @@ public final class MainActivity extends Activity {
 
     private void setStatus(String value) {
         statusText.setText(value);
+    }
+
+    private void recoverRecentSms() {
+        if (InboxRecovery.recoverRecent(this, 15 * 60_000L) > 0) {
+            DeliveryScheduler.schedule(this, "inbox-recovery");
+        }
     }
 
     private LinearLayout.LayoutParams matchWrap() {

@@ -11,6 +11,7 @@ public final class BootReceiver extends BroadcastReceiver {
             return;
         }
         RelayKeepAliveService.start(context);
+        InboxRecovery.recoverRecent(context, 15 * 60_000L);
         if (SmsQueue.hasPending(context)) {
             DeliveryScheduler.schedule(context, "boot");
         }

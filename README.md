@@ -18,10 +18,12 @@ Mobile network -> Android SMS broadcast + inbox event -> durable local queue
 ```
 
 1. Android delivers `SMS_RECEIVED` to `SmsReceiver`. The foreground guard also observes
-   the system SMS inbox for changes; this is event-driven and does not poll.
+   the system SMS inbox for changes.
 2. Multipart SMS segments are combined by sender. If vendor firmware supplies an empty or
-   unusable broadcast, `InboxRecovery` reads only fresh inbox rows. The app determines the
-   physical SIM slot and synchronously commits the message to its private local queue.
+   unusable broadcast, `InboxRecovery` reads the system inbox. After first initialization,
+   it remembers the last row ID and no longer limits recovery by message age. A system job
+   also checks new IDs roughly every 15 minutes. The app then determines the physical SIM
+   slot and synchronously commits the message to its private local queue.
 3. Each installation has a stable, pseudonymous device ID and a human-readable device
    name. Android `JobScheduler` waits for a network and posts queued items to the relay over
    HTTPS. The bot token is used as the bearer credential. An optional SHA-256 certificate
@@ -34,14 +36,17 @@ Mobile network -> Android SMS broadcast + inbox event -> durable local queue
    from the server. The deterministic message ID and delivery metadata remain for up to
    seven days for deduplication.
 
-The foreground guard performs no polling or periodic network work. It keeps a low-priority
-status notification and reduces process eviction. It does **not** override manufacturer
+The foreground guard performs no network polling. It keeps a low-priority status notification
+and reduces process eviction. The backup job only makes a short local inbox query and does
+not wake the network when the queue is empty. These mechanisms do **not** override manufacturer
 battery restrictions; the phone settings below are mandatory on Tecno HiOS.
 
 ## Repository layout
 
 - `app/src/main/java/.../SmsReceiver.java`: parses incoming SMS and identifies the SIM.
-- `InboxRecovery.java`: recovers only new, recent rows from Android's SMS inbox.
+- `InboxRecovery.java`: recovers every unprocessed row from Android's SMS inbox.
+- `InboxRecoveryJobService.java` and `InboxRecoveryScheduler.java`: lightweight backup inbox
+  check roughly every 15 minutes.
 - `SmsQueue.java`: synchronously stores up to 100 pending SMS in private app storage.
 - `DeliveryJobService.java` and `DeliveryScheduler.java`: network-aware Android retries.
 - `RelaySender.java`: HTTPS client and optional SHA-256 certificate pin validation.
@@ -173,6 +178,10 @@ says the app is unrestricted. Configure all available items:
 7. Reopen SMS Relay once after reboot or a firmware update and check that the status says
    `Configured: yes`, `SMS permission: granted`, and `Foreground guard: active`.
 
+Version 1.2.2 and newer attempts to restore the service automatically after an APK update.
+After a HiOS update, still open the app and recheck Battery Lab because firmware may reset
+its own internal allowlist.
+
 ### Tecno HiOS: critical extra setting
 
 On tested Tecno HiOS firmware, auto-start, the regular Android unrestricted battery mode,
@@ -194,6 +203,11 @@ adb shell am start -a com.transsion.batterylab.app_saving
 Then select **SMS Relay -> No restrictions**. Locking the app in Recents may be kept as an
 additional measure, but it does not replace this Battery Lab setting.
 
+Some HiOS versions can show **No restrictions** even after the internal allowlist was reset.
+Even when it already appears selected, choose **Intelligent management** once and then choose
+**No restrictions** again. Repeat this after a HiOS update or whenever locked-screen delivery
+stops working.
+
 Perform a real test with the screen locked for several minutes. A USSD balance request is
 not an SMS and cannot test `SMS_RECEIVED`.
 
@@ -208,9 +222,14 @@ not an SMS and cannot test `SMS_RECEIVED`.
 - Deterministic message IDs make repeated uploads idempotent.
 - The app is not the default SMS application and does not delete messages from the phone.
 - If a normal `SMS_RECEIVED` broadcast is empty or unusable but the SMS exists in Android's
-  inbox, the running observer recovers it automatically. Opening the app and boot recovery
-  also scan recent rows. SMS that Android never writes to the inbox cannot be reconstructed,
-  so the battery settings remain essential.
+  inbox, the running observer recovers it automatically. Opening the app, boot recovery, and
+  the backup system job also check every ID after the last processed row, so a late discovery
+  is not discarded by message age. Backup recovery may take several tens of minutes when
+  firmware suppresses the immediate event. An SMS that Android never writes to the inbox
+  cannot be reconstructed, so the battery settings remain essential.
+- Separate messages are not discarded merely because their sender and body are identical.
+  An exact ID prevents reprocessing the same row; in an unusual broadcast/inbox race, a
+  duplicate Telegram delivery is preferred over losing a message.
 - USSD dialogs, push notifications, messenger messages, and cell broadcast alerts are not
   ordinary SMS and are not forwarded.
 
@@ -224,8 +243,9 @@ not an SMS and cannot test `SMS_RECEIVED`.
 - SMS content is cleared from the server after delivery to all recipients. Pending content
   remains until delivery so retries can work.
 - Android backup and data extraction are disabled for configuration and queue data.
-- `READ_SMS` is used only to query fresh inbox rows for recovery. The app has no API or UI
-  for exporting SMS history and does not upload old inbox contents.
+- `READ_SMS` is used only for recovery. First initialization checks a limited recent window;
+  afterward the app reads only row IDs above the last processed one. It has no API or UI for
+  exporting the full SMS history.
 - Telegram bot chats use Telegram's cloud encryption, not end-to-end encryption. Telegram,
   a compromised bot token, a compromised server, or a compromised recipient account can
   expose messages. Rotate an exposed bot token and rebuild the server configuration.

@@ -16,15 +16,24 @@ final class InboxRecovery {
     private InboxRecovery() {
     }
 
-    static int recoverRecent(Context context, long maxAgeMillis) {
+    static synchronized int recoverRecent(Context context, long initialMaxAgeMillis) {
         if (context.checkSelfPermission(Manifest.permission.READ_SMS)
                 != PackageManager.PERMISSION_GRANTED) {
             return 0;
         }
 
-        long cutoff = System.currentTimeMillis() - maxAgeMillis;
         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        boolean initialized = preferences.contains(LAST_ID);
         long lastId = preferences.getLong(LAST_ID, -1L);
+        long newestId = initialized ? lastId : latestInboxId(context);
+        String selection = initialized
+                ? Telephony.Sms._ID + " > ?"
+                : Telephony.Sms.DATE + " >= ?";
+        String[] selectionArgs = {
+                Long.toString(initialized
+                        ? lastId
+                        : System.currentTimeMillis() - initialMaxAgeMillis)
+        };
         String[] projection = {
                 Telephony.Sms._ID,
                 Telephony.Sms.ADDRESS,
@@ -36,9 +45,9 @@ final class InboxRecovery {
         try (Cursor cursor = context.getContentResolver().query(
                 Telephony.Sms.Inbox.CONTENT_URI,
                 projection,
-                Telephony.Sms.DATE + " >= ? AND " + Telephony.Sms._ID + " > ?",
-                new String[]{Long.toString(cutoff), Long.toString(lastId)},
-                Telephony.Sms.DATE + " ASC")) {
+                selection,
+                selectionArgs,
+                Telephony.Sms._ID + " ASC")) {
             if (cursor == null) {
                 return 0;
             }
@@ -48,12 +57,13 @@ final class InboxRecovery {
             int dateColumn = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE);
             int subscriptionColumn = cursor.getColumnIndexOrThrow(
                     Telephony.Sms.SUBSCRIPTION_ID);
-            long newestId = lastId;
+            boolean unresolvedRowSeen = false;
             while (cursor.moveToNext()) {
                 long id = cursor.getLong(idColumn);
                 int subscriptionId = cursor.getInt(subscriptionColumn);
                 int slot = simSlot(context, subscriptionId);
                 if (slot != 0 && slot != 1) {
+                    unresolvedRowSeen = true;
                     continue;
                 }
                 if (SmsQueue.enqueue(
@@ -64,9 +74,11 @@ final class InboxRecovery {
                         slot)) {
                     recovered++;
                 }
-                newestId = Math.max(newestId, id);
+                if (!unresolvedRowSeen) {
+                    newestId = Math.max(newestId, id);
+                }
             }
-            if (newestId > lastId) {
+            if (newestId >= 0L && (!initialized || newestId > lastId)) {
                 preferences.edit().putLong(LAST_ID, newestId).commit();
             }
         } catch (RuntimeException ignored) {
@@ -75,9 +87,29 @@ final class InboxRecovery {
         return recovered;
     }
 
+    private static long latestInboxId(Context context) {
+        try (Cursor cursor = context.getContentResolver().query(
+                Telephony.Sms.Inbox.CONTENT_URI,
+                new String[]{Telephony.Sms._ID},
+                null,
+                null,
+                Telephony.Sms._ID + " DESC")) {
+            if (cursor != null && cursor.moveToFirst()) {
+                return cursor.getLong(0);
+            }
+        } catch (RuntimeException ignored) {
+            // The provider can be unavailable briefly while the phone is booting.
+        }
+        return -1L;
+    }
+
     private static int simSlot(Context context, int subscriptionId) {
+        int slot = -1;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return SubscriptionManager.getSlotIndex(subscriptionId);
+            slot = SubscriptionManager.getSlotIndex(subscriptionId);
+            if (slot == 0 || slot == 1) {
+                return slot;
+            }
         }
         boolean simOneConfigured = !SettingsStore.simOneWhitelist(context).isEmpty();
         boolean simTwoConfigured = !SettingsStore.simTwoWhitelist(context).isEmpty();

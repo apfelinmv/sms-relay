@@ -42,6 +42,7 @@ public final class RelayKeepAliveService extends Service {
         if (!SettingsStore.isConfigured(context)) {
             return;
         }
+        InboxRecoveryScheduler.schedule(context);
         Intent intent = new Intent(context, RelayKeepAliveService.class);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

@@ -43,11 +43,13 @@ public final class SmsReceiver extends BroadcastReceiver {
         }
 
         boolean enqueued = false;
-        for (Map.Entry<String, StringBuilder> entry : bodiesBySender.entrySet()) {
-            enqueued |= SmsQueue.enqueue(context, entry.getKey(), entry.getValue().toString(),
-                    timesBySender.get(entry.getKey()), simSlot);
+        if (simSlot == 0 || simSlot == 1) {
+            for (Map.Entry<String, StringBuilder> entry : bodiesBySender.entrySet()) {
+                enqueued |= SmsQueue.enqueue(context, entry.getKey(), entry.getValue().toString(),
+                        timesBySender.get(entry.getKey()), simSlot);
+            }
         }
-        if (bodiesBySender.isEmpty()) {
+        if (bodiesBySender.isEmpty() || simSlot < 0) {
             enqueued = InboxRecovery.recoverRecent(context, 2 * 60_000L) > 0;
         }
         if (enqueued || SmsQueue.hasPending(context)) {

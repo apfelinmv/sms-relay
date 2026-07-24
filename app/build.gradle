@@ -28,8 +28,8 @@ android {
         applicationId "com.example.smstotelegram"
         minSdk 23
         targetSdk 35
-        versionCode 5
-        versionName "1.2.2"
+        versionCode 7
+        versionName "1.2.4"
 
         buildConfigField "String", "RELAY_DEFAULT_URL", "\"${relayDefaultUrl}\""
         buildConfigField "String", "RELAY_DEFAULT_PIN", "\"${relayDefaultPin}\""

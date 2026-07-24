@@ -1,8 +1,10 @@
 package com.example.smstotelegram;
 
+import android.Manifest;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.provider.Telephony;
 import android.telephony.SmsMessage;
@@ -18,7 +20,17 @@ public final class SmsReceiver extends BroadcastReceiver {
             return;
         }
 
-        RelayKeepAliveService.start(context);
+        RelayKeepAliveService.startForIncomingSms(context);
+        if (context.checkSelfPermission(Manifest.permission.READ_SMS)
+                == PackageManager.PERMISSION_GRANTED) {
+            boolean enqueued = InboxRecovery.recoverRecent(context, 2 * 60_000L) > 0;
+            if (enqueued || SmsQueue.hasPending(context)) {
+                DeliveryScheduler.schedule(context, "sms-inbox");
+            }
+            return;
+        }
+
+        // Without READ_SMS, the protected broadcast is the only available source.
         SmsMessage[] messages = Telephony.Sms.Intents.getMessagesFromIntent(intent);
         int simSlot = simSlot(intent);
 
@@ -49,11 +61,8 @@ public final class SmsReceiver extends BroadcastReceiver {
                         timesBySender.get(entry.getKey()), simSlot);
             }
         }
-        if (bodiesBySender.isEmpty() || simSlot < 0) {
-            enqueued = InboxRecovery.recoverRecent(context, 2 * 60_000L) > 0;
-        }
         if (enqueued || SmsQueue.hasPending(context)) {
-            DeliveryScheduler.schedule(context, "sms");
+            DeliveryScheduler.schedule(context, "sms-broadcast");
         }
     }
 

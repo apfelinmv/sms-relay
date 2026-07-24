@@ -18,16 +18,30 @@ import android.os.Looper;
 import android.provider.Telephony;
 
 public final class RelayKeepAliveService extends Service {
+    private static final String ACTION_INCOMING_SMS =
+            BuildConfig.APPLICATION_ID + ".action.INCOMING_SMS";
     private static final String CHANNEL_ID = "sms_relay_status";
     private static final int NOTIFICATION_ID = 30231;
     private static final long INBOX_SETTLE_DELAY_MILLIS = 750L;
+    private static final long INBOX_SETTLE_RETRY_MILLIS = 3_000L;
+    private static final long INBOX_POLL_INTERVAL_MILLIS = 30_000L;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private boolean inboxObserverRegistered;
     private final Runnable recoverInbox = () -> {
-        int recovered = InboxRecovery.recoverRecent(this, 5 * 60_000L);
-        if (recovered > 0 || SmsQueue.hasPending(this)) {
-            DeliveryScheduler.schedule(this, "inbox-change");
+        recoverInbox("inbox-change");
+    };
+    private final Runnable recoverIncomingSms = () -> {
+        recoverInbox("sms-settle");
+    };
+    private final Runnable retryIncomingSms = () -> {
+        recoverInbox("sms-settle-retry");
+    };
+    private final Runnable pollInbox = new Runnable() {
+        @Override
+        public void run() {
+            recoverInbox("inbox-poll");
+            mainHandler.postDelayed(this, INBOX_POLL_INTERVAL_MILLIS);
         }
     };
     private final ContentObserver inboxObserver = new ContentObserver(mainHandler) {
@@ -39,11 +53,20 @@ public final class RelayKeepAliveService extends Service {
     };
 
     static void start(Context context) {
+        start(context, null);
+    }
+
+    static void startForIncomingSms(Context context) {
+        start(context, ACTION_INCOMING_SMS);
+    }
+
+    private static void start(Context context, String action) {
         if (!SettingsStore.isConfigured(context)) {
             return;
         }
         InboxRecoveryScheduler.schedule(context);
         Intent intent = new Intent(context, RelayKeepAliveService.class);
+        intent.setAction(action);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent);
@@ -61,11 +84,22 @@ public final class RelayKeepAliveService extends Service {
         createChannel();
         startForeground(NOTIFICATION_ID, notification());
         ensureInboxObserver();
+        InboxRecoveryScheduler.schedule(this);
+        mainHandler.post(pollInbox);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         ensureInboxObserver();
+        InboxRecoveryScheduler.schedule(this);
+        mainHandler.removeCallbacks(pollInbox);
+        mainHandler.post(pollInbox);
+        if (intent != null && ACTION_INCOMING_SMS.equals(intent.getAction())) {
+            mainHandler.removeCallbacks(recoverIncomingSms);
+            mainHandler.removeCallbacks(retryIncomingSms);
+            mainHandler.postDelayed(recoverIncomingSms, INBOX_SETTLE_DELAY_MILLIS);
+            mainHandler.postDelayed(retryIncomingSms, INBOX_SETTLE_RETRY_MILLIS);
+        }
         if (SmsQueue.hasPending(this)) {
             DeliveryScheduler.schedule(this, "keep-alive");
         }
@@ -75,6 +109,9 @@ public final class RelayKeepAliveService extends Service {
     @Override
     public void onDestroy() {
         mainHandler.removeCallbacks(recoverInbox);
+        mainHandler.removeCallbacks(recoverIncomingSms);
+        mainHandler.removeCallbacks(retryIncomingSms);
+        mainHandler.removeCallbacks(pollInbox);
         if (inboxObserverRegistered) {
             getContentResolver().unregisterContentObserver(inboxObserver);
             inboxObserverRegistered = false;
@@ -122,12 +159,28 @@ public final class RelayKeepAliveService extends Service {
                 != PackageManager.PERMISSION_GRANTED) {
             return;
         }
+        boolean registered = false;
         try {
             getContentResolver().registerContentObserver(
                     Telephony.Sms.CONTENT_URI, true, inboxObserver);
-            inboxObserverRegistered = true;
+            registered = true;
+        } catch (RuntimeException ignored) {
+            // Try the inbox-specific URI below.
+        }
+        try {
+            getContentResolver().registerContentObserver(
+                    Telephony.Sms.Inbox.CONTENT_URI, true, inboxObserver);
+            registered = true;
         } catch (RuntimeException ignored) {
             // Some vendor providers can be temporarily unavailable during boot.
+        }
+        inboxObserverRegistered = registered;
+    }
+
+    private void recoverInbox(String reason) {
+        int recovered = InboxRecovery.recoverRecent(this, 15 * 60_000L);
+        if (recovered > 0 || SmsQueue.hasPending(this)) {
+            DeliveryScheduler.schedule(this, reason);
         }
     }
 

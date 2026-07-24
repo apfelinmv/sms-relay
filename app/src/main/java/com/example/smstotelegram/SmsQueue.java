@@ -25,6 +25,16 @@ final class SmsQueue {
 
     static synchronized boolean enqueue(Context context, String sender, String body,
                                         long sentAtMillis, int simSlot) {
+        return enqueue(context, sender, body, sentAtMillis, simSlot, null);
+    }
+
+    static synchronized boolean enqueueInbox(Context context, long inboxId, String sender,
+                                             String body, long sentAtMillis, int simSlot) {
+        return enqueue(context, sender, body, sentAtMillis, simSlot, "inbox:" + inboxId);
+    }
+
+    private static boolean enqueue(Context context, String sender, String body,
+                                   long sentAtMillis, int simSlot, String sourceIdentity) {
         String safeBody = body == null ? "" : body;
         if (safeBody.length() > MAX_BODY_CHARS) {
             safeBody = safeBody.substring(0, MAX_BODY_CHARS) + "\n...[truncated]";
@@ -32,7 +42,9 @@ final class SmsQueue {
 
         String safeSender = sender == null || sender.isEmpty() ? "unknown" : sender;
         String identity = SettingsStore.deviceId(context) + "\n"
-                + safeSender + "\n" + safeBody + "\n" + sentAtMillis + "\n" + simSlot;
+                + (sourceIdentity == null
+                ? safeSender + "\n" + safeBody + "\n" + sentAtMillis + "\n" + simSlot
+                : sourceIdentity);
         String id = UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8)).toString();
 
         List<QueuedSms> items = load(context);

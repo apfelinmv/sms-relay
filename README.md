@@ -8,7 +8,7 @@ recipient allowlists. A Telegram user receives messages only after sharing and v
 their own allowlisted phone number with the bot.
 
 The project is designed for a stationary, inexpensive Android phone. It has no ads,
-analytics, polling loop, cloud SDK, or third-party Android runtime dependencies.
+analytics, network polling loop, cloud SDK, or third-party Android runtime dependencies.
 
 ## Architecture
 
@@ -17,13 +17,16 @@ Mobile network -> Android SMS broadcast + inbox event -> durable local queue
                -> HTTPS + TLS pin -> private relay server -> SQLite -> Telegram
 ```
 
-1. Android delivers `SMS_RECEIVED` to `SmsReceiver`. The foreground guard also observes
-   the system SMS inbox for changes.
-2. Multipart SMS segments are combined by sender. If vendor firmware supplies an empty or
-   unusable broadcast, `InboxRecovery` reads the system inbox. After first initialization,
-   it remembers the last row ID and no longer limits recovery by message age. A system job
-   also checks new IDs roughly every 15 minutes. The app then determines the physical SIM
-   slot and synchronously commits the message to its private local queue.
+1. Android delivers the protected `SMS_RECEIVED` event to `SmsReceiver`. With `READ_SMS`
+   granted, the event is used as a wake-up signal and the corresponding system inbox row is
+   the authoritative message source. Parsing the broadcast payload remains a fallback for
+   devices where inbox access is unavailable.
+2. The foreground guard observes both SMS provider URIs, performs a tiny local inbox check
+   while it is alive, and retries shortly after an incoming event to accommodate slow vendor
+   providers. After first initialization, `InboxRecovery` remembers the last row ID and no
+   longer limits recovery by message age. A persisted system job also checks new IDs roughly
+   every 15 minutes. The app determines the physical SIM slot and synchronously commits the
+   message to its private local queue.
 3. Each installation has a stable, pseudonymous device ID and a human-readable device
    name. Android `JobScheduler` waits for a network and posts queued items to the relay over
    HTTPS. The bot token is used as the bearer credential. An optional SHA-256 certificate
@@ -36,14 +39,16 @@ Mobile network -> Android SMS broadcast + inbox event -> durable local queue
    from the server. The deterministic message ID and delivery metadata remain for up to
    seven days for deduplication.
 
-The foreground guard performs no network polling. It keeps a low-priority status notification
-and reduces process eviction. The backup job only makes a short local inbox query and does
-not wake the network when the queue is empty. These mechanisms do **not** override manufacturer
-battery restrictions; the phone settings below are mandatory on Tecno HiOS.
+The foreground guard performs no network polling and holds no wake lock. It keeps a
+low-priority status notification, reduces process eviction, and makes only short local inbox
+queries. The backup job also checks only local row IDs and does not wake the network when the
+queue is empty. These mechanisms do **not** override manufacturer battery restrictions; the
+phone settings below are mandatory on Tecno HiOS.
 
 ## Repository layout
 
-- `app/src/main/java/.../SmsReceiver.java`: parses incoming SMS and identifies the SIM.
+- `app/src/main/java/.../SmsReceiver.java`: wakes recovery for an incoming SMS; parses the
+  broadcast payload only when inbox access is unavailable.
 - `InboxRecovery.java`: recovers every unprocessed row from Android's SMS inbox.
 - `InboxRecoveryJobService.java` and `InboxRecoveryScheduler.java`: lightweight backup inbox
   check roughly every 15 minutes.
@@ -56,6 +61,7 @@ battery restrictions; the phone settings below are mandatory on Tecno HiOS.
 - `server/install.sh`: Debian/Ubuntu installation script.
 - `server/nginx-sms-relay.conf`: TLS reverse proxy for `/sms`, `/configure`, and `/health`.
 - `server/test_sms_relay.py`: server regression tests.
+- `TROUBLESHOOTING.md`: detailed failure analysis, HiOS Hiber recovery, and test procedure.
 
 ## Requirements
 
@@ -211,6 +217,9 @@ stops working.
 Perform a real test with the screen locked for several minutes. A USSD balance request is
 not an SMS and cannot test `SMS_RECEIVED`.
 
+For the complete incident analysis, diagnostics, recovery procedure, and layered reliability
+design, see [Troubleshooting and reliability](TROUBLESHOOTING.md).
+
 ## Reliability limits
 
 - The local queue holds 100 messages. If more than 100 remain unsent, the oldest item is
@@ -219,7 +228,9 @@ not an SMS and cannot test `SMS_RECEIVED`.
   Internet do not erase queued messages.
 - Android and the server retry independently. The server backoff starts at 30 seconds and
   is capped at one hour.
-- Deterministic message IDs make repeated uploads idempotent.
+- Inbox messages use a deterministic ID derived from the installation and Android inbox row
+  ID. Re-reading one row is idempotent, while two genuinely separate identical SMS retain
+  different IDs.
 - The app is not the default SMS application and does not delete messages from the phone.
 - If a normal `SMS_RECEIVED` broadcast is empty or unusable but the SMS exists in Android's
   inbox, the running observer recovers it automatically. Opening the app, boot recovery, and
@@ -228,8 +239,8 @@ not an SMS and cannot test `SMS_RECEIVED`.
   firmware suppresses the immediate event. An SMS that Android never writes to the inbox
   cannot be reconstructed, so the battery settings remain essential.
 - Separate messages are not discarded merely because their sender and body are identical.
-  An exact ID prevents reprocessing the same row; in an unusual broadcast/inbox race, a
-  duplicate Telegram delivery is preferred over losing a message.
+  Since version 1.2.4, the system inbox is the authoritative source when `READ_SMS` is
+  granted, preventing the former broadcast/inbox race from creating a second ID.
 - USSD dialogs, push notifications, messenger messages, and cell broadcast alerts are not
   ordinary SMS and are not forwarded.
 

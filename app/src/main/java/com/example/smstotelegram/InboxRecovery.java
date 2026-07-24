@@ -66,8 +66,9 @@ final class InboxRecovery {
                     unresolvedRowSeen = true;
                     continue;
                 }
-                if (SmsQueue.enqueue(
+                if (SmsQueue.enqueueInbox(
                         context,
+                        id,
                         cursor.getString(senderColumn),
                         cursor.getString(bodyColumn),
                         cursor.getLong(dateColumn),
